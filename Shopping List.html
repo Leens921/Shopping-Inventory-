@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pantry Tracker</title><!-- pantry + fridge -->
+<style>
+  :root{--bg:#faf7f2;--card:#fff;--ink:#2a2620;--mute:#8a8174;--line:#ece6dc;
+    --ok:#3f7d4e;--okb:#e6f1e8;--low:#a96a10;--lowb:#fbf0dc;--out:#b23b2e;--outb:#f9e3e0;--accent:#2a2620}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{position:sticky;top:0;background:var(--bg);padding:14px 16px 10px;border-bottom:1px solid var(--line);z-index:5}
+  h1{font-size:20px;margin:0 0 2px}
+  .sub{color:var(--mute);font-size:13px;margin:0 0 10px}
+  .tabs{display:flex;gap:6px}
+  .tabs button{flex:1;padding:8px 6px;border:1px solid var(--line);background:#fff;border-radius:999px;font:inherit;font-size:13px;color:var(--ink);cursor:pointer}
+  .tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .counts{display:flex;gap:12px;font-size:12px;color:var(--mute);margin-top:8px}
+  main{padding:8px 12px 100px;max-width:680px;margin:0 auto}
+  h2{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:18px 4px 6px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--line)}
+  .row:first-child{border-top:0}
+  .name{flex:1;min-width:0}
+  .name small{display:block;color:var(--mute);font-size:12px}
+  .st{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex-shrink:0}
+  .st button{border:0;background:#fff;padding:6px 9px;font:inherit;font-size:12px;color:var(--mute);cursor:pointer}
+  .st button+button{border-left:1px solid var(--line)}
+  .st button.on.s0{background:var(--okb);color:var(--ok);font-weight:600}
+  .st button.on.s1{background:var(--lowb);color:var(--low);font-weight:600}
+  .st button.on.s2{background:var(--outb);color:var(--out);font-weight:600}
+  .del{border:0;background:none;color:#c9c0b3;font-size:18px;cursor:pointer;padding:0 2px}
+  .empty{padding:24px;text-align:center;color:var(--mute)}
+  .bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;gap:8px}
+  .bar input,.bar select{font:inherit;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+  .bar input{flex:1;min-width:0}
+  .bar select{max-width:120px}
+  .btn{font:inherit;padding:9px 14px;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer}
+  .copy{margin:12px 0 0;width:100%}
+  .toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>Home Inventory</h1>
+  <p class="sub">Tap a status for each item (tap it again to clear). "Shopping list" shows everything Low or Out.</p>
+  <div class="tabs">
+    <button data-v="all" class="on">All</button>
+    <button data-v="shop">Shopping list</button>
+  </div>
+  <div class="counts" id="counts"></div>
+</header>
+<main id="list"></main>
+<div class="bar">
+  <input id="newName" placeholder="Add an item…" autocomplete="off">
+  <select id="newCat"></select>
+  <button class="btn" id="addBtn">Add</button>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const KEY='pantry-tracker-v5';
+const OLD_KEYS=['pantry-tracker-v4','pantry-tracker-v3','pantry-tracker-v2'];
+const RETIRED_CATS=['Fridge: bread'];
+// items that moved category or were renamed: "oldCat|oldName" -> [newCat, newName]
+const MOVES={
+ "Fridge: produce|Green apples":["Fresh fruit","Apples (green)"],
+ "Fridge: produce|Pears":["Fresh fruit","Pears"],
+ "Fridge: produce|Plums":["Fresh fruit","Plums"],
+ "Fridge: produce|Bananas":["Fresh fruit","Bananas"],
+ "Fridge: produce|Brussels sprouts":["Fresh vegetables & herbs","Brussels sprouts"],
+ "Fridge: produce|Celery":["Fresh vegetables & herbs","Celery"],
+ "Fridge: produce|Carrots":["Fresh vegetables & herbs","Carrots"],
+ "Fridge: produce|Mini sweet peppers":["Fresh vegetables & herbs","Mini sweet peppers"],
+ "Fridge: produce|Lettuce / salad greens":["Fresh vegetables & herbs","Lettuce / salad greens"],
+ "Fridge: produce|Fresh garlic":["Fresh vegetables & herbs","Fresh garlic"],
+ "Produce|Potatoes":["Fresh vegetables & herbs","Potatoes"],
+ "Produce|Onions":["Fresh vegetables & herbs","Onions"]
+};
+const LABELS=['Have','Low','Out'];
+// status: 0 = Have, 1 = Low, 2 = Out
+const SEED={
+ "Cooking basics":[
+  ["Vegetable / canola oil",0],["Olive oil",0],["Apple cider vinegar",0],["White vinegar",0],
+  ["Cornstarch",0],["Breadcrumbs",0],["Brown gravy mix",0],["Taco seasoning",0],
+  ["Beef broth",0],["Chicken broth",2,"Only beef seen"],["Tomato paste",2,"Not seen"],["Tomato sauce",2,"Not seen"],["Cooking spray",2,"Not seen"]],
+ "Pasta, rice & grains":[
+  ["Cavatappi",0],["Penne rigate",0],["Extra wide egg noodles",0],["Spaghetti / long pasta",2,"Not seen"],
+  ["Long grain white rice",0],["Instant rice",0],["90-second jasmine rice",0],
+  ["Old-fashioned oats",0],["Instant oatmeal",0],["Top Ramen",0],["Lentils or quinoa",2,"Nice to have"]],
+ "Canned goods":[
+  ["Kidney beans",0],["Black beans",2,"Not seen"],["Chickpeas",2,"Not seen"],
+  ["Diced tomatoes",0],["Stewed tomatoes",0],["Marinara",1,"Only 1 jar"],
+  ["Sweet corn",0],["Sliced potatoes",0],["Sliced beets",0],["Black olives",0],["Green beans",2,"Not seen"],
+  ["Chicken noodle soup",0],["Clam chowder",0],["Mushroom gravy",0],
+  ["Tuna",0],["Spam",0],["Canned chicken",2,"Optional"]],
+ "Fruit":[
+  ["Pineapple chunks",0],["Pears",0],["Fruit cocktail",0],["Mandarin orange cups",0],["Applesauce",0],["Raisins",0]],
+ "Baking":[
+  ["Flour",0],["Granulated sugar",0],["Dark brown sugar",0],["Chocolate chips",0],["White chips",0],
+  ["Diced pecans",0],["Pancake mix",0],["Syrup",0],
+  ["Baking soda",2,"Not seen"],["Baking powder",2,"Not seen"],["Vanilla extract",2,"Not seen"],["Powdered sugar",2,"Not seen"]],
+ "Spreads & condiments":[
+  ["Peanut butter",0],["Nutella",0],["Honey",0],["Apricot preserves",0],["Salsa",0],
+  ["Italian dressing",0],["Taco sauce",0],
+  ["Soy sauce",2,"Not seen"]],
+ "Fridge: condiments":[
+  ["Ketchup",0],["Yellow mustard",0],["Deli / spicy mustard",0],["Mayo",0],["Relish",0],
+  ["Hot sauce",0],["BBQ sauce",0],["A1",0],["Worcestershire",0],["Vinaigrette",0],
+  ["Pickles",0],["Green olives",0],["Roasted red peppers",0],["Banana peppers",0],
+  ["Lemon juice",0],["Lime juice",0],["Grated parmesan",0],["Maple syrup",0],["Jam",0],
+  ["Hummus",0],["French onion dip",0]],
+ "Fridge: dairy & eggs":[
+  ["Eggs",0],["Milk",0],["Half & half",0],["Butter",0],["Smart Balance",0],
+  ["Cream cheese",0],["Greek yogurt (Chobani)",0],
+  ["Sour cream",2,"Couldn't confirm; check the dairy bin tub"]],
+ "Fridge: deli & cheese":[
+  ["Deli roast beef",0],["Other deli meat",0],["Sliced American",0],["Sliced provolone / Swiss",0],
+  ["Cheddar block",0],["Shredded Mexican blend",0],["Shredded mozzarella",0]],
+ "Fresh fruit":[
+  ["Apples (green)",0],["Apples (red)",-1],["Bananas",2,"Not seen; may be on counter"],["Oranges",-1],["Clementines",-1],
+  ["Lemons",-1],["Limes",-1],["Grapes",-1],["Strawberries",-1],["Blueberries",-1],["Raspberries",-1],["Blackberries",-1],
+  ["Pears",0],["Plums",0],["Peaches / nectarines",-1],["Pineapple",-1],["Watermelon",-1],["Cantaloupe / honeydew",-1],
+  ["Mango",-1],["Kiwi",-1],["Avocados",-1]],
+ "Fresh vegetables & herbs":[
+  ["Potatoes",0],["Sweet potatoes",-1],["Onions",0],["Red onions",-1],["Scallions",-1],["Fresh garlic",2,"Not seen"],
+  ["Carrots",0],["Celery",0],["Broccoli",-1],["Cauliflower",-1],["Green beans (fresh)",-1],["Brussels sprouts",0],
+  ["Mini sweet peppers",0],["Bell peppers",-1],["Jalapeños",-1],["Cucumbers",-1],["Tomatoes",-1],["Cherry tomatoes",-1],
+  ["Lettuce / salad greens",2,"Not seen"],["Spinach",-1],["Zucchini / squash",-1],["Mushrooms",-1],["Asparagus",-1],
+  ["Corn on the cob",-1],["Cilantro",-1],["Parsley",-1],["Ginger",-1]],
+ "Meat & protein":[
+  ["Chicken breasts",-1],["Chicken thighs",-1],["Chicken wings / drumsticks",-1],["Rotisserie chicken",-1],
+  ["Ground beef",-1],["Ground turkey",-1],["Steak",-1],["Roast (chuck / pot roast)",-1],
+  ["Pork chops",-1],["Pork tenderloin",-1],["Bacon",-1],["Breakfast sausage",-1],["Italian sausage",-1],
+  ["Hot dogs",-1],["Ham",-1],["Salmon",-1],["White fish (cod / tilapia)",-1],["Shrimp",-1],["Tofu",-1]],
+ "Freezer":[
+  ["Frozen mixed vegetables",-1],["Frozen broccoli",-1],["Frozen peas",-1],["Frozen corn",-1],["Frozen spinach",-1],
+  ["Frozen berries / fruit",-1],["French fries / tater tots",-1],["Chicken nuggets / tenders",-1],["Fish sticks",-1],
+  ["Frozen meatballs",-1],["Frozen pizza",-1],["Frozen meals / entrées",-1],["Frozen burritos",-1],["Dumplings / potstickers",-1],
+  ["Frozen waffles / pancakes",-1],["Garlic bread",-1],["Pie crust",-1],["Ice cream",-1],["Ice pops",-1],["Ice",-1]],
+ "Bread":[
+  ["Sandwich bread (sliced)",0],["Rolls",0],["Tortillas / taco shells",0],["Pitas",0],["Bagels",0],["Raisin bread",0]],
+ "Fridge: drinks":[
+  ["Orange juice",0],["Core Power shakes",0],["Wine",0]],
+ "Spices":[
+  ["Salt",2,"Check spice drawer"],["Black pepper",2,"Check spice drawer"],["Garlic powder",2,"Check spice drawer"],
+  ["Onion powder",2,"Check spice drawer"],["Italian seasoning",2,"Check spice drawer"]],
+ "Breakfast":[
+  ["Raisin Bran",0],["Corn Flakes",0],["Cinnamon Toast Crunch",0],["Life cereal",0],["Granola",0],["Rice cakes",0]],
+ "Snacks":[
+  ["Mac & cheese cups",0],["Fruit pouches",0],["Rice Krispies Treats",0],["MadeGood bars",0],
+  ["Ritz",0],["Cheez-It",0],["Triscuit",0],["Peanuts",0],["Trail mix",0],["Veggie straws",0],
+  ["Beef sticks",0],["Chips variety pack",0],["Oreos / Chips Ahoy",0],["Butter cookies",0],["Biscotti",0],
+  ["Ice cream cones",0],["Jiffy Pop",0]],
+ "Drinks & coffee":[
+  ["Café Bustelo",0],["Tim Hortons K-cups",0],["Diet Coke",0],["Tonic water",0],["Capri Sun",0],
+  ["Shelf-stable / evaporated milk",2,"Nice to have"]],
+ "Household & paper":[
+  ["Paper towels",0],["Toilet paper",0],["Tissues",0],["Paper plates",0],["Paper bowls",0],
+  ["Plastic spoons",0],["Plastic forks / knives",0],["Napkins",0],["Foam cups",0],["Plastic cups",0],
+  ["Food storage containers",0],["Trash bags",0],["Light bulbs",0],
+  ["Aluminum foil",0],["Plastic wrap",0],["Zip-top bags",0],["Parchment paper",0],
+  ["Dish soap",0],["Dishwasher detergent",0],["Sponges",0],["Laundry detergent",0],
+  ["Dryer sheets",0],["All-purpose cleaner",0],["Batteries",0]],
+ "Personal care":[
+  ["Tampons",2,"Added to list"],["Pads / liners",0],
+  ["Toothpaste",0],["Toothbrushes",0],["Floss",0],["Mouthwash",0],
+  ["Shampoo",0],["Conditioner",0],["Body wash / soap",0],["Hand soap",0],
+  ["Deodorant",0],["Lotion",0],["Face wash",0],["Sunscreen",0],
+  ["Razors",0],["Shaving cream",0],["Cotton swabs",0],["Cotton pads",0],
+  ["Lip balm",0],["Hair ties",0],["Band-aids",0],["Pain reliever",0],["Kids' fever reducer",0]]
+};
+let data, view='all';
+function load(){
+  try{const s=localStorage.getItem(KEY); if(s){data=JSON.parse(s);return;}}catch(e){}
+  data=[];let id=0;
+  for(const [cat,items] of Object.entries(SEED)) for(const [n,s,note] of items) data.push({id:id++,cat,name:n,s,note:note||''});
+  // carry over statuses and user-added items from the previous version
+  const NEW_CATS=['Fresh fruit','Fresh vegetables & herbs','Meat & protein','Freezer'];
+  const moved=new Set(Object.values(MOVES).map(([c,n])=>c+'|'+n));
+  for(const k of OLD_KEYS){
+    try{const s=localStorage.getItem(k); if(!s)continue; const old=JSON.parse(s);
+      const matched=new Set();
+      for(const o of old){
+        if(RETIRED_CATS.includes(o.cat))continue;
+        let cat=o.cat,name=o.name; const mv=MOVES[cat+'|'+name]; if(mv){[cat,name]=mv;}
+        const m=data.find(d=>d.name===name&&d.cat===cat);
+        if(m){m.s=o.s;matched.add(m.id);}
+        else {const x={id:id++,cat,name,s:o.s,note:o.note||''};data.push(x);matched.add(x.id);}
+      }
+      // keep items the user deleted earlier deleted; only brand-new items get added
+      data=data.filter(d=>matched.has(d.id)||(NEW_CATS.includes(d.cat)&&!moved.has(d.cat+'|'+d.name)));
+      break;
+    }catch(e){}
+  }
+  save();
+}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(data));}catch(e){}}
+function esc(t){return t.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function cats(){const o=[];for(const c of Object.keys(SEED))o.push(c);for(const d of data)if(!o.includes(d.cat))o.push(d.cat);return o;}
+function render(){
+  const list=document.getElementById('list');
+  const show=view==='shop'?data.filter(d=>d.s>0):data;
+  let h='';
+  for(const c of cats()){
+    const rows=show.filter(d=>d.cat===c).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})); if(!rows.length)continue;
+    h+=`<h2>${esc(c)}</h2><div class="card">`;
+    for(const d of rows){
+      h+=`<div class="row"><div class="name">${esc(d.name)}${d.note&&d.s>0?`<small>${esc(d.note)}</small>`:''}</div>
+      <div class="st">${LABELS.map((l,i)=>`<button class="s${i} ${d.s===i?'on':''}" data-id="${d.id}" data-s="${i}">${l}</button>`).join('')}</div>
+      <button class="del" data-del="${d.id}" aria-label="Remove">×</button></div>`;
+    }
+    h+='</div>';
+  }
+  if(view==='shop'){
+    h = show.length ? h+'<button class="btn copy" id="copyBtn">Copy shopping list</button>'
+      : '<div class="empty">Nothing low or out. Nice.</div>';
+  }
+  list.innerHTML=h;
+  const n=[0,0,0,0];data.forEach(d=>n[d.s>=0?d.s:3]++);
+  document.getElementById('counts').innerHTML=`<span>✓ ${n[0]} have</span><span>◐ ${n[1]} low</span><span>○ ${n[2]} out</span>${n[3]?`<span>· ${n[3]} not set</span>`:''}`;
+  const cb=document.getElementById('copyBtn'); if(cb) cb.onclick=copyList;
+}
+function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1600);}
+async function copyList(){
+  let txt='';
+  for(const c of cats()){const r=data.filter(d=>d.cat===c&&d.s>0).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'}));if(!r.length)continue;
+    txt+=c+'\n'+r.map(d=>'- '+d.name+(d.s===1?' (low)':'')).join('\n')+'\n\n';}
+  try{await navigator.clipboard.writeText(txt.trim());toast('Copied');}catch(e){toast('Copy not allowed here');}
+}
+document.getElementById('list').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  if(b.dataset.del!==undefined){data=data.filter(d=>d.id!=b.dataset.del);save();render();return;}
+  if(b.dataset.id!==undefined){const d=data.find(x=>x.id==b.dataset.id);const v=+b.dataset.s;d.s=(d.s===v?-1:v);save();render();}
+});
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('on'));b.classList.add('on');view=b.dataset.v;render();});
+function add(){
+  const i=document.getElementById('newName'),n=i.value.trim(); if(!n)return;
+  const id=data.reduce((m,d)=>Math.max(m,d.id),-1)+1;
+  data.push({id,cat:document.getElementById('newCat').value,name:n,s:0,note:''});
+  i.value='';save();render();toast('Added');
+}
+document.getElementById('addBtn').onclick=add;
+document.getElementById('newName').addEventListener('keydown',e=>{if(e.key==='Enter')add();});
+load();
+document.getElementById('newCat').innerHTML=cats().map(c=>`<option>${esc(c)}</option>`).join('');
+render();
+</script>
+</body>
+</html>
